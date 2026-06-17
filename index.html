@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Game Boy — Java/Wasm</title>
+<style>
+  :root {
+    --gb0:#9bbc0f; --gb1:#8bac0f; --gb2:#306230; --gb3:#0f380f;
+    --shell:#c4c1b4; --shell-dark:#a7a496; --shell-line:#6f6d62;
+    --ink:#23241c; --bg:#16170f; --bezel:#2b2c22;
+    --accent:#0f380f;
+    --mono:"SFMono-Regular",ui-monospace,"Cascadia Mono","Roboto Mono",Menlo,Consolas,monospace;
+    --sans:"Helvetica Neue",Arial,system-ui,sans-serif;
+  }
+  * { box-sizing:border-box; }
+  body {
+    margin:0; min-height:100vh; background:
+      radial-gradient(120% 90% at 50% -10%, #20221a 0%, var(--bg) 60%);
+    color:#d7d8cb; font-family:var(--sans);
+    display:flex; flex-direction:column; align-items:center;
+    padding:32px 20px 60px;
+  }
+  .eyebrow {
+    font-family:var(--mono); font-size:11px; letter-spacing:.32em;
+    text-transform:uppercase; color:#7d8a4f; margin:0 0 6px;
+  }
+  h1 {
+    margin:0 0 26px; font-size:23px; font-weight:600; letter-spacing:.01em;
+    color:#e9eadb;
+  }
+  h1 span { color:var(--gb0); }
+
+  .stage {
+    display:grid; grid-template-columns:minmax(0,auto) 320px; gap:26px;
+    align-items:start; max-width:1040px; width:100%;
+  }
+  @media (max-width:880px){ .stage { grid-template-columns:1fr; } }
+
+  /* ---- The console: a DMG-style shell wrapping the green screen ---- */
+  .console {
+    background:linear-gradient(160deg, var(--shell) 0%, var(--shell-dark) 100%);
+    border-radius:14px 14px 44px 14px;
+    padding:22px 22px 26px;
+    box-shadow:0 1px 0 #e4e2d6 inset, 0 -2px 0 #8b8979 inset,
+               0 22px 40px -18px rgba(0,0,0,.7);
+    justify-self:center;
+  }
+  .bezel {
+    background:var(--bezel);
+    border-radius:10px 10px 26px 10px;
+    padding:26px 34px 30px;
+    box-shadow:0 2px 6px rgba(0,0,0,.45) inset;
+  }
+  .bezel-top {
+    display:flex; align-items:center; gap:10px; justify-content:center;
+    margin-bottom:14px;
+  }
+  .bezel-top .rail { height:1px; flex:1; background:#434536; }
+  .bezel-top .label {
+    font-family:var(--mono); font-size:9px; letter-spacing:.24em;
+    color:#9aa07d; text-transform:uppercase; white-space:nowrap;
+  }
+  .power {
+    width:7px; height:7px; border-radius:50%; background:#7d2b2b;
+    box-shadow:0 0 0 2px #1d1e16;
+  }
+  .power.on { background:#e2402f; box-shadow:0 0 8px #e2402f, 0 0 0 2px #1d1e16; }
+
+  canvas#screen {
+    display:block; width:640px; height:576px; max-width:100%; height:auto;
+    aspect-ratio:160/144;
+    image-rendering:pixelated; image-rendering:crisp-edges;
+    background:var(--gb0); border-radius:3px;
+    box-shadow:0 0 0 1px #000, 0 0 22px rgba(155,188,15,.10);
+  }
+
+  /* ---- Controls strip ---- */
+  .controls {
+    display:flex; flex-wrap:wrap; gap:10px; margin-top:18px; justify-content:center;
+  }
+  .btn {
+    font-family:var(--mono); font-size:12px; letter-spacing:.04em;
+    color:var(--ink); background:#e7e5d8;
+    border:1px solid var(--shell-line); border-radius:6px;
+    padding:9px 14px; cursor:pointer; transition:transform .04s, background .15s;
+    box-shadow:0 1px 0 #fff inset, 0 2px 0 #9b9888;
+  }
+  .btn:hover { background:#f2f0e4; }
+  .btn:active { transform:translateY(2px); box-shadow:0 1px 0 #fff inset; }
+  .btn.primary { background:var(--gb3); color:var(--gb0); border-color:#0a260a; box-shadow:0 1px 0 #2e5a2e inset, 0 2px 0 #061a06; }
+  .btn.primary:hover { background:#164d16; }
+  .btn:focus-visible { outline:2px solid var(--gb0); outline-offset:2px; }
+  input[type=file] { display:none; }
+
+  .status {
+    font-family:var(--mono); font-size:11.5px; color:#9fa68a; text-align:center;
+    margin-top:14px; min-height:1.2em; letter-spacing:.02em;
+  }
+  .status.warn { color:#e2a02f; }
+  .status.err  { color:#e2402f; }
+
+  /* ---- Info panel ---- */
+  .info {
+    background:#1d1e16; border:1px solid #2f3125; border-radius:10px;
+    padding:20px 22px; font-size:13px; line-height:1.55; color:#bdc0ac;
+  }
+  .info h2 {
+    margin:0 0 4px; font-family:var(--mono); font-size:11px; letter-spacing:.22em;
+    text-transform:uppercase; color:#7d8a4f;
+  }
+  .info h2:not(:first-child){ margin-top:20px; }
+  .keys { width:100%; border-collapse:collapse; font-family:var(--mono); font-size:12px; }
+  .keys td { padding:4px 0; vertical-align:top; }
+  .keys td:first-child { color:#e9eadb; width:96px; white-space:nowrap; }
+  .keys td:last-child { color:#8f967a; }
+  kbd {
+    font-family:var(--mono); font-size:11px; color:#23241c; background:var(--gb0);
+    border-radius:3px; padding:1px 6px; box-shadow:0 1px 0 #5c7a08;
+  }
+  .info p { margin:8px 0 0; color:#979a85; }
+  .info code { background:#26281d; padding:1px 5px; border-radius:3px; color:#c7cab4; font-family:var(--mono); font-size:11.5px; }
+  a { color:var(--gb0); }
+
+  @media (prefers-reduced-motion: reduce){ .btn { transition:none; } }
+</style>
+</head>
+<body>
+  <!-- <p class="eyebrow">Java &rarr; WebAssembly &middot; TeaVM</p> -->
+  <h1>ben5882 <span>·</span> Game Boy</h1>
+
+  <div class="stage">
+    <!-- Console -->
+    <div>
+      <div class="console">
+        <div class="bezel">
+          <div class="bezel-top">
+            <span class="power" id="power"></span>
+            <span class="rail"></span>
+            <span class="label">Dot Matrix With Stereo Sound</span>
+            <span class="rail"></span>
+          </div>
+          <canvas id="screen" width="160" height="144"></canvas>
+        </div>
+      </div>
+
+      <div class="controls">
+        <label class="btn primary" for="romInput" tabindex="0"
+               onkeydown="if(event.key==='Enter'||event.key===' ')document.getElementById('romInput').click()">
+          Load ROM
+        </label>
+        <input type="file" id="romInput" accept=".gb,.gbc,.bin">
+
+        <label class="btn" for="saveInput" tabindex="0"
+               onkeydown="if(event.key==='Enter'||event.key===' ')document.getElementById('saveInput').click()">
+          Load Save
+        </label>
+        <input type="file" id="saveInput" accept=".sav">
+
+        <button class="btn" id="downloadBtn">Download Save</button>
+      </div>
+
+      <div class="status" id="status">Booting Wasm module&hellip;</div>
+    </div>
+
+    <!-- Info -->
+    <aside class="info">
+      <h2>Controls</h2>
+      <table class="keys">
+        <tr><td><kbd>&larr;</kbd><kbd>&uarr;</kbd><kbd>&darr;</kbd><kbd>&rarr;</kbd></td><td>D-pad</td></tr>
+        <tr><td><kbd>A</kbd></td><td>A button</td></tr>
+        <tr><td><kbd>S</kbd></td><td>B button</td></tr>
+        <tr><td><kbd>Enter</kbd></td><td>Start</td></tr>
+        <tr><td><kbd>L-Shift</kbd></td><td>Select</td></tr>
+      </table>
+
+      <h2>How to use</h2>
+      <p><strong>Load ROM</strong> picks a <code>.gb</code> file from your device and starts it.
+      Nothing is uploaded anywhere — it runs entirely in your browser.</p>
+      <p>To continue a battery save, choose <strong>Load Save</strong> <em>first</em>, then load the
+      matching ROM. <strong>Download Save</strong> writes the cartridge RAM back out as a
+      <code>.sav</code> you can keep.</p>
+
+      <h2>Notes</h2>
+      <p>The emulator core is written in Java, compiled to WebAssembly.
+      Sound is not wired up. Provide your own ROMs.</p>
+    </aside>
+  </div>
+
+  <!-- TeaVM-generated loader. The copy-runtime goal names it after TeaVM's
+       default base name ("classes"), even though the module itself is gb.wasm. -->
+  <script src="classes.wasm-runtime.js"></script>
+  <script>
+  (async function () {
+    const W = 160, H = 144;
+    const screen = document.getElementById('screen');
+    const ctx = screen.getContext('2d');
+    const img = ctx.createImageData(W, H);
+    const statusEl = document.getElementById('status');
+    const power = document.getElementById('power');
+
+    let ex = null;          // TeaVM exports
+    let romLoaded = false;
+    let romName = 'game';
+    let stagedSave = null;  // bytes from Load Save, applied on next ROM load
+
+    function setStatus(msg, cls) {
+      statusEl.textContent = msg;
+      statusEl.className = 'status' + (cls ? ' ' + cls : '');
+    }
+
+    // ---- Boot the Wasm module ----
+    try {
+      // ?v=1 lets browsers cache the wasm normally; bump to v=2, v=3, ...
+      // whenever you rebuild and redeploy, to force visitors to re-fetch it.
+      const teavm = await TeaVM.wasmGC.load('gb.wasm?v=1');
+      ex = teavm.exports;
+      ex.main([]);  // initialize runtime (the empty array is required)
+
+      // Boot ROM + Nintendo logo live next to index.html; fetch and register them.
+      const [boot, logo] = await Promise.all([
+        fetch('dmg_boot_256.bin').then(r => { if (!r.ok) throw new Error('dmg_boot_256.bin'); return r.arrayBuffer(); }),
+        fetch('extracted_logo.bin').then(r => { if (!r.ok) throw new Error('extracted_logo.bin'); return r.arrayBuffer(); }),
+      ]);
+      ex.init(new Uint8Array(boot), new Uint8Array(logo));
+
+      // Show the idle green screen immediately.
+      img.data.set(ex.getPixelBuffer());
+      ctx.putImageData(img, 0, 0);
+
+      setStatus('Ready — load a ROM to begin.');
+    } catch (err) {
+      console.error(err);
+      setStatus('Failed to load: ' + err.message +
+        '  (open via a web server, not file://)', 'err');
+      return;
+    }
+
+    // ---- Render loop, paced to a real-time ~59.7 FPS (the Game Boy's rate) ----
+    // rAF fires at the MONITOR's refresh rate (often 120/144Hz), which would run
+    // the emulator 2x+ too fast. So we gate on elapsed wall-clock time and only
+    // advance a frame once ~16.74 ms have actually passed.
+    let frameCount = 0;
+    const FRAME_MS = 1000 / 59.73; // Game Boy frame period (~16.74 ms)
+    let nextFrameAt = 0;
+    function loop(now) {
+      requestAnimationFrame(loop);
+      if (!romLoaded) return;
+      if (nextFrameAt === 0) nextFrameAt = now;
+      if (now < nextFrameAt) return;          // not time for the next frame yet
+      // Advance the schedule; if we've fallen far behind, resync instead of
+      // trying to catch up with a burst of frames.
+      nextFrameAt += FRAME_MS;
+      if (now > nextFrameAt + 250) nextFrameAt = now + FRAME_MS;
+      try {
+        ex.runNextFrame();
+        const px = ex.getPixelBuffer();
+        img.data.set(new Uint8Array(px.buffer, px.byteOffset, px.byteLength));
+        ctx.putImageData(img, 0, 0);
+        frameCount++;
+        if (frameCount % 30 === 0) {
+          setStatus('Running: ' + romName + '  ·  frame ' + frameCount);
+        }
+      } catch (err) {
+        console.error(err);
+        const msg = (err && err.message) ? err.message : String(err);
+        setStatus('Stopped at frame ' + frameCount + ' — ' + msg, 'err');
+        romLoaded = false;
+        return;
+      }
+    }
+    requestAnimationFrame(loop);
+
+    // ---- Load ROM ----
+    document.getElementById('romInput').addEventListener('change', async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      if (stagedSave) ex.loadSave(stagedSave);   // must precede loadRom
+      ex.loadRom(bytes);
+      romName = file.name.replace(/\.(gbc?|bin)$/i, '');
+      romLoaded = true;
+      power.classList.add('on');
+      setStatus('Running: ' + file.name + (stagedSave ? '  (save loaded)' : ''));
+    });
+
+    // ---- Load Save (stage it; applied when the ROM is loaded) ----
+    document.getElementById('saveInput').addEventListener('change', async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      stagedSave = new Uint8Array(await file.arrayBuffer());
+      if (romLoaded) {
+        setStatus('Save staged — reload the ROM to apply it.', 'warn');
+      } else {
+        setStatus('Save staged: ' + file.name + ' — now load the matching ROM.');
+      }
+    });
+
+    // ---- Download Save ----
+    document.getElementById('downloadBtn').addEventListener('click', () => {
+      if (!romLoaded) { setStatus('Load a ROM first.', 'warn'); return; }
+      const data = ex.getSaveData();           // Uint8Array (may be empty)
+      if (!data || data.length === 0) {
+        setStatus('This cartridge has no battery save.', 'warn');
+        return;
+      }
+      const blob = new Blob([data], { type: 'application/octet-stream' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = romName + '.sav';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(a.href);
+      setStatus('Saved ' + romName + '.sav');
+    });
+
+    // ---- Keyboard -> joypad ----
+    const keyMap = {
+      ArrowRight: 0, ArrowLeft: 1, ArrowUp: 2, ArrowDown: 3,
+      KeyA: 4, KeyS: 5, ShiftLeft: 6, Enter: 7
+    };
+    window.addEventListener('keydown', (e) => {
+      const id = keyMap[e.code];
+      if (id !== undefined && ex) { ex.pressButton(id, true); e.preventDefault(); }
+    });
+    window.addEventListener('keyup', (e) => {
+      const id = keyMap[e.code];
+      if (id !== undefined && ex) { ex.pressButton(id, false); e.preventDefault(); }
+    });
+  })();
+  </script>
+</body>
+</html>
